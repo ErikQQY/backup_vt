@@ -1,0 +1,82 @@
+# PathlineTransformerV2 is designed to be warm-started from a trained V1:
+#   python train.py --config config/segmentation/pathline_transformer_v2.yaml \
+#       --data_dir /path/to/dataset --model_path /path/to/v1_checkpoint.pth.tar
+#
+# Without --model_path it can also be trained from scratch.
+model:
+  NAME: BaseSeg
+  encoder_args:
+    NAME: PathlineTransformerV2
+    KpathlinePerGroup: 4
+    in_channels: 7
+    # PathlineGroups is filled from the dataset metadata.
+    dmodel: 144
+    num_encoder_layers: 3
+    dropout: 0.15
+    k: 16
+
+    temporal_sampling_ratio: 0.5
+    group_sampling_ratio: 0.625
+    full_inference: false
+    gradient_regularization: 0.00001
+
+    # Edge-level physics-aware attention.
+    physics_attention_heads: 8
+    physics_attention_rank: 4
+    physics_relation_hidden_dim: 32
+    physics_bias_init: 0.0
+    physics_bias_clip: 8.0
+
+    # Per-pathline physics-aware temporal attention.
+    temporal_attention_heads: 8
+    temporal_attention_hidden_dim: 64
+    temporal_gate_init: 0.0
+
+  criterion_args:
+    NAME: BCELoss
+
+# Keep the seed fixed for a fair V1/V2 comparison.
+random_seed: 3614
+wandb: true
+
+# The physics edge adapter adds some memory relative to V1.  Four accumulated
+# batches preserve V1's effective batch size of 100.
+batch_size: 25
+gradient_accumulate: 4
+gradient_norm_clip: 1.0
+
+# Fine-tuning schedule.  For a from-scratch run, use --learning_rate 0.0001
+# and --epochs 200 to mirror the V1 experiment.
+lr: 0.00005
+epochs: 100
+val_freq: 5
+
+optimizer:
+  NAME: adamw
+  weight_decay: 0.000001
+
+scheduler: TwoStep
+warmup_epochs: 20
+second_lr: 0.00001
+
+save_model: true
+save_freq: 20
+
+dataloader:
+  num_workers: 0
+
+dataset:
+  NAME: UnsteadyVastisPathlineSeg
+  data_dir: /path/to/vatistas_trainable/
+
+datatransforms:
+  train: [MinMaxNormalization, WhiteNoise]
+  val: [MinMaxNormalization, WhiteNoise]
+  test: []
+  kwargs:
+    noiseMaginitude: 0.01
+
+# This task evaluates all pathlines and reports true accuracy in addition to
+# precision/recall/F1/IoU.
+test_tasks:
+  tasks: [TestPathlineSegmentation]

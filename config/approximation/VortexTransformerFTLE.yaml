@@ -1,0 +1,74 @@
+
+model:
+  NAME: BaseSeg
+  encoder_args:
+    NAME: LineTransformer4FTLE
+    KpathlinePerGroup: 2
+    in_channels: 7        #if in_channels not specify then it take value from dataset.PathlineFeature (function readDataSetRelatedConfig)
+    PathlineGroups: 2500    ##PathlineGroups  is no longer write by function readDataSetRelatedConfig
+    dmodel: 144 #becasue of pos_embedding,   dmodel must be multiple of 3*2=6, [if not the code will adjust itself.]
+    num_encoder_layers: 3
+    k: 16 # query KNN
+
+
+  criterion_args:
+    NAME: MSELoss
+   
+
+# ---------------------------------------------------------------------------- #
+# Training cfgs 
+# ---------------------------------------------------------------------------- #
+# Training parameters
+# random_seed: 4259
+
+# wandb: True 
+batch_size: 8
+
+lr: 0.00001
+epochs: 100
+
+val_freq: 0
+# scheduler: TwoStep
+# warmup_epochs: 80 
+# second_lr: 0.00001
+optimizer:
+ NAME: 'adamw'
+ weight_decay: 0.000001
+
+# scheduler
+scheduler: cosine
+warmup_epochs:  2
+warmup_lr_init: 5.0e-5
+min_lr: 0.000005
+
+save_model: false
+save_freq: 30 # saving frequency for ckpt. -1 only saving the latest and the best.
+
+# scheduler: TwoStep
+# warmup_epochs: 60 
+# second_lr: 0.000005
+
+dataloader:
+  num_workers: 0
+dataset:
+  NAME: Pathline2FTLEDataset
+  data_dir: 'FlowDataAndVisualizationScripts\data'
+  # downSampleRatio: 0.03125 #0.25,0.125
+  # data_dir: 'CppProjects/data/realDataFixLabelBug/'
+  # data_dir: 'CppProjects/data/dbgPathline6/X32_Y32_T5'
+  # data_dir: '/ibex/user/zhanx0o/data/dbgPathline6/X32_Y32_T5'
+
+#add WhiteNoise will boost vortex_unet 's performance
+datatransforms:
+  train: []  # rotation does not help
+  val: []
+  test: []
+  kwargs:
+    noiseMaginitude: 0.01
+  
+
+test_tasks:
+      tasks: ["TestSegmentation","TestPathlineSeg"] 
+
+
+

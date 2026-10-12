@@ -1,0 +1,64 @@
+model:
+  NAME: BaseSeg
+  encoder_args:
+    NAME: DengMVUnet
+    in_channels: 4
+    features: 32
+    dropout: 0.0
+  criterion_args:
+    NAME: SmoothedBCELoss
+    # Train targets become 0.01/0.99; validation/test still use ordinary BCE.
+    label_smoothing: 0.02
+
+random_seed: 4259
+lr: 0.0001
+epochs: 100
+optimizer:
+  NAME: adamw
+  weight_decay: 0.0001
+scheduler: plateau
+eval_metric: val_loss
+patience_epochs: 3
+decay_rate: 0.5
+warmup_epochs: 5
+warmup_lr: 0.000001
+min_lr: 0.000001
+
+# The key is batch_size, not batchsize. Effective batch size is 64.
+batch_size: 64
+gradient_accumulate: 1
+gradient_norm_clip: 1.0
+val_freq: 1
+checkpoint_monitor: val_iou
+early_stopping: True
+early_stopping_patience: 20
+train_eval_samples: 512
+dataset_audit_samples: 512
+
+dataloader:
+  num_workers: 0
+dataset:
+  NAME: SteadyVelocityGridSegmentationMVUnet
+  # Dataset recorded in pathline_MVUNet_new.log; override with --data_dir.
+  data_dir: /home/featurize/data/vatistas_mvunet_trainable/
+  legacy_xy_layout: False
+  # Joint input/mask symmetries in raw physical units, training split only.
+  augment_d4: True
+
+datatransforms:
+  train: [MinMaxNormalization]
+  val: [MinMaxNormalization]
+  test: [MinMaxNormalization]
+  kwargs:
+    # minV/maxV are read from dataset metadata for all three splits.
+    # If WhiteNoise is enabled later, add it after MinMaxNormalization.
+    noiseMaginitude: 0.02
+    noise_in_normalized_space: True
+
+# The dedicated MVUNet evaluator writes full-pixel metrics and PNGs.
+test_save_samples: 10
+
+save_model_path: outputModels/MVUNet_augmented/
+save_model: True
+save_freq: 30
+save_last: True

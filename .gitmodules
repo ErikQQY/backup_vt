@@ -1,0 +1,13 @@
+[submodule "CppModules/pybind11"]
+	path = CppModules/pybind11
+	url = https://github.com/pybind/pybind11
+	branch = stable
+[submodule "CppProjects/PybindCppModules/pybind11"]
+	path = CppProjects/PybindCppModules/pybind11
+	url = https://github.com/pybind/pybind11
+[submodule "CppProjects/external/magic_enum"]
+	path = CppProjects/external/magic_enum
+	url = https://github.com/Neargye/magic_enum
+[submodule "CppProjects/external/cereal"]
+	path = CppProjects/external/cereal
+	url = https://github.com/USCiLab/cereal

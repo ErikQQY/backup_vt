@@ -1,0 +1,99 @@
+# Vortex-Seg-Net (Wang et al., 2020) with PyflowVis data adapters.
+#
+# The paper-native core is eight sequential convolutions with channels
+# 8,16,32,64,32,16,8,1; the first six are SAME and the last two VALID.
+# For repository full-field/pathline labels, preserve_input_shape adds the
+# required two-cell halo so prediction and target shapes remain identical.
+model:
+  NAME: BaseSeg
+  encoder_args:
+    NAME: VortexSegNet
+    input_mode: auto
+    spatial_dims: auto
+    in_channels: 7
+
+    # Dense 2-D generator channels are [u,v,curl,IVD], while the paper's 3-D
+    # branch consumes [u,v,w]. Non-velocity criteria never enter the network.
+    dense_velocity_features: [0, 1]
+    dense_3d_velocity_features: [0, 1, 2]
+    # Pathline channels are [x,y,t,IVD,distance_or_seed_label,u,v].
+    pathline_velocity_features: [5, 6]
+
+    # Exact paper widths and padding pattern. All seven hidden layers use
+    # Conv+BatchNorm+ReLU. The paper inconsistently depicts/states terminal
+    # ReLU but never supplies a probability map; this implementation resolves
+    # that conflict as final Conv+BatchNorm+sigmoid for valid BCE probabilities.
+    feature_channels: [8, 16, 32, 64, 32, 16, 8, 1]
+    preserve_input_shape: true
+    boundary_padding: replicate
+
+    # Engineering normalization for heterogeneous VortexTransformer files;
+    # input normalization was not disclosed in the paper.
+    normalize_input: true
+    normalization: minmax
+    normalization_eps: 0.00000001
+
+    # Pathline compatibility adapter. Coordinate rank ordering maps sparse
+    # trajectories to a regular LxHxW volume and mean-pools logits over L.
+    # L is trajectory time/arc order, not Cartesian z, so this is not a
+    # Cartesian-equivalent replacement for dense Eulerian velocity patches.
+    layout_mode: coordinate
+    padding_threshold: -999.0
+    KpathlinePerGroup: 4
+
+  # User-requested BCE-only training. The paper itself reports BCE+Dice.
+  criterion_args:
+    NAME: BCELoss
+
+random_seed: 3614
+wandb: false
+
+# Requested training setup: 250 epochs, Adam, lr=1e-4, BCE, early stopping.
+lr: 0.0001
+epochs: 250
+optimizer:
+  NAME: adam
+  weight_decay: 0.0
+
+# The request does not specify patience/min_delta; these are explicit,
+# adjustable implementation defaults monitored on validation BCE each epoch.
+val_freq: 1
+early_stopping: true
+early_stopping_patience: 20
+early_stopping_min_delta: 0.0
+
+# Batch size was not specified in the paper/request.
+batch_size: 32
+gradient_accumulate: 1
+gradient_norm_clip: 1.0
+print_freq: 100
+
+save_model: true
+save_freq: 25
+save_model_path: outputModels/VortexSegNet/
+
+dataloader:
+  num_workers: 0
+
+# Auto selects paired velocity+segmentation when available, otherwise
+# *_pathline.bin. A *_segmentation.bin is a target and cannot train alone.
+# Literal *_velocity.bin and the generator's actual <sample>.bin naming are
+# both supported. Keep each run modality-homogeneous.
+dataset:
+  NAME: VortexSegNetBinaryDataset
+  data_dir: /path/to/vortex_transformer_dataset
+  input_source: auto  # auto | velocity | pathline
+  # Existing dense masks are aligned to t0; nonzero frames are rejected.
+  velocity_frame: 0
+
+# Normalization is inside the model so padding sentinels can be excluded.
+datatransforms:
+  train: []
+  val: []
+  test: []
+  kwargs: {}
+
+# This evaluator flattens every element after enforcing prediction/target
+# shape equality, so it works for both [B,K] and dense [B,H,W] masks.
+test_tasks:
+  tasks: [TestPathlineSegmentation]

@@ -1,0 +1,190 @@
+# ---------------------------------------------------------------------------
+# Noisy Vatistas/Tobias data for MVUNet (plus noisy-grid pathline descriptors).
+#
+# Processing order is deliberately fixed:
+#   1. evaluate the clean analytical Vatistas/Tobias velocity on a grid;
+#   2. add independent Gaussian noise to discrete u and v;
+#   3. derive curl, IVD, gradients, the vorticity monitor/adaptive mesh,
+#      pathlines, LAVD, strain, divergence, etc. only from that noisy grid;
+#   4. retain the clean analytical Vatistas signed-distance labels.
+#
+# Pool totals inherited from VatistasDataset.yaml:
+#   STEADY  = 3000  = 1500 fitted (real-data patches) + 1400 random (from the fitted
+#                     distribution) + 100 manually-added Killing fields.
+#   UNSTEADY = 60000 = 3000 steady x 20 randomly-sampled rigid-body observers over T=[0,1].
+#
+# Run:
+#   python VatistasFlowDatasetGeneratorNoiseMVUNet.py
+#   python VatistasFlowDatasetGeneratorNoiseMVUNet.py --full
+#   python SplitMVUNet.py --source outputs/vatistas_noise_mvunet_raw \
+#     --target outputs/vatistas_noise_mvunet_trainable
+# ---------------------------------------------------------------------------
+seed: 7068
+
+# Scalar, [u_level, v_level], and {u: ..., v: ...} forms are accepted.  The
+# mapping form makes the independent per-component controls explicit.
+noise_level: {u: 0.01, v: 0.01}
+noise:
+  # component_rms: sigma_u=level_u*rms(clean_u), likewise for v.
+  # velocity_rms:  both component levels multiply RMS speed.
+  # absolute:      each level is the Gaussian standard deviation.
+  scale: component_rms
+  mean: {u: 0.0, v: 0.0}
+  seed_offset: 104729
+
+fit_dir: outputs/vatistas_fit          # cached BEST fit (mean MSE 0.0094 = 34.7 dB PSNR)
+fit_config: config/FittingVatistas.yaml  # only used with --refit
+
+model:
+  bounds: {rc: [0.05, 2.0], n: [0.5, 6.0], s: [0.05, 5.0], t: [1.5]}
+  geometry:
+    min_core_axis: 0.05
+    max_core_axis: 0.50
+    domain_limit: 0.95
+    center_limit: 0.90
+    # Relative spacing plus a direct superposition check keep nearby vortices
+    # close enough to be useful but prevent their visible centers from shifting.
+    spacing_factor: 1.50
+    spacing_margin: 0.05
+    max_interaction_ratio: 0.15
+    max_center_shift_fraction: 0.20
+    interaction_ring_samples: 32
+    max_fit_mse: 0.30
+
+# --- Steady field pool (paper: 3000 = 1400 + 1500 + 100) ---
+generate:
+  num_fields: 1400        # (a) random fields sampled from the fitted distribution
+  # Matches config/segmentation/mvu_net.yaml; any square multiple of 8 is valid.
+  grid: 32                # render/output resolution on [-1,1]^2
+  min_vortices: 1
+  max_vortices: 2
+  enforce_spacing: true
+  min_contribution: 0.05
+  max_sample_attempts: 500
+  max_field_attempts: 200 # restart both profiles if the first one has no label-safe partner
+fitted:
+  num_fields: 1500        # (b) fitted real-flow patches (paper target: all 1500 cached fits)
+  prefer_low_mse: true
+  # Match the original generator: independently sample one or two valid fitted
+  # profiles; two-profile fields must also pass spacing/interaction checks.
+  profile_policy: clean_random_1_or_2
+  min_vortices: 1
+  max_vortices: 2
+  profile_jitter_std: 0.02
+  profile_jitter_attempts: 16
+  # Keep the estimated real center within 10% of the analytic core radius.
+  max_interaction_ratio: 0.15
+  max_center_shift_fraction: 0.10
+killing_fields:
+  num: 100                # (c) manually-added Killing fields (rigid-motion hard negatives:
+                          #     observer-producible -> label is EMPTY / not an objective vortex)
+  abc_range: [0.8, 0.8, 1.0]   # sampling half-range for the field's own (a, b, c)
+
+# --- Observers: 20 per steady field -> 60000 unsteady (paper) ---
+observer:
+  transformation: tobias  # port of transformation.cpp::Tobias_ObserverTransformation
+  per_field: 20           # rigid-body observers per steady field (paper: 20)
+  timesteps: 24           # T frames per unsteady field
+  tmin: 0.0
+  tmax: 1.0               # paper observes over T~=[0,1]
+  center: [0.0, 0.0]
+  start_pos: [0.0, 0.0]
+  # Tobias inputs: abc=[xdot,ydot,theta_dot], abc_dot=[xddot,yddot,theta_ddot]
+  a0_range: 0.30          # initial |xdot|,|ydot|
+  adot_range: 0.30        # constant |xddot|,|yddot|
+  c0_range: 0.60          # initial |theta_dot|
+  cdot_range: 0.60        # constant |theta_ddot|
+  make_labels: true       # save the shared t=0 objective-vortex segmentation
+
+# --- Pathlines: mirrors generateMixUnsteadyFieldPathline ---
+pathline:
+  enabled: true
+  # Compute all descriptors in memory. Whether they are persisted is controlled
+  # independently by output.save_pathline_bin/save_unsteady_npz.
+  # [x,y,t,IVD,distance/seed-label,u,v,LAVD,vorticity,du_dx,du_dy,
+  #  dv_dx,dv_dy,divergence,strain,det(gradV),swirl,Q].
+  save_all_features: true
+  # Options: RECTANGULAR_CLUSTER4_RANDOM, GRID_CROSS_SEEDING,
+  #          VORTICITY_IMPORTANCE_SEEDING, FEATURE_ADAPTIVE_MESH_SEEDING
+  sampling: FEATURE_ADAPTIVE_MESH_SEEDING
+  count_k: 16             # 256 adaptive-mesh seeds (legacy-count compatible)
+  length: 16
+  jitter_std: 0.05
+  # VORTICITY_IMPORTANCE_SEEDING evaluates this many uniformly distributed
+  # candidates per final seed at t=tmin, then samples by |curl|.  Twenty percent
+  # remain uniformly selected so low-vorticity/background regions keep coverage.
+  vorticity_candidate_multiplier: 8
+  vorticity_uniform_fraction: 0.20
+  vorticity_importance_power: 1.5
+  vorticity_clip_percentile: 99.0
+  vorticity_boundary_margin: 1.0e-6
+  # FEATURE_ADAPTIVE_MESH_SEEDING constructs a vorticity monitor on a jittered
+  # background mesh, reserves 80% of the optimized CVT mesh generators for the
+  # top 30% |curl| region, and reserves the remaining 20% for the low-|curl|
+  # region. Smaller target cells are used toward each group's feature extreme.
+  feature_high_fraction: 0.80
+  feature_high_vorticity_percentile: 70.0
+  # A 32x32 monitor matches the MVUNet grid and leaves enough candidates for
+  # the 205 high-vorticity + 51 background adaptive seeds.
+  feature_mesh_resolution: 32
+  feature_mesh_size_ratio: 4.0
+  feature_monitor_power: 1.5
+  feature_mesh_iterations: 5
+  feature_clip_percentile: 99.0
+  feature_boundary_margin: 1.0e-6
+  padding_value: -1000.0
+  max_reseed_attempts: 32
+
+# --- LIC images: C++-style stable-noise, bidirectional LIC ---
+lic:
+  enabled: false        # If the generator generate LICImages is enabled, it will render and save the LIC images for each unsteady field.
+  image_size: 256
+  noise_size: 256
+  noise_seed_offset: 811
+  step_size: 0.002
+  max_steps: 64          # C++ uses 256; 64 keeps Python generation practical
+  frame_stride: 1        # save deformed LIC at every unsteady time step
+  color_by_velocity_magnitude: true
+  overlay_segmentation: true
+  # For every LIC PNG, also write a paired *_mesh.png containing the same LIC
+  # with the pathline seeding points and their Delaunay unstructured mesh.
+  mesh_overlay_enabled: true
+  mesh_line_color: [0, 255, 255]       # cyan edges remain visible on LIC
+  mesh_line_alpha: 210
+  mesh_line_width: 1
+  mesh_point_color: [255, 55, 35]      # large red-orange seeding points
+  mesh_point_alpha: 245
+  mesh_point_radius: 2                 # pixel radius
+  mesh_point_outline_color: [255, 255, 255]
+  mesh_point_outline_width: 1
+  mesh_seed_offset: 1733
+
+output:
+  # Raw paired binaries; run SplitMVUNet.py afterwards to create train/val/test.
+  out_dir: outputs/vatistas_noise_mvunet_raw
+  save_plots: false
+  save_steady: false       # write the full 3000-field steady set (params+fields+labels)
+  save_unsteady_npz: false # write unsteady_shard_*.npz; false keeps binary/meta/LIC outputs
+
+  # MVUNet-ready t0 [noisy_u,noisy_v,noisy-grid curl,noisy-grid IVD].  The
+  # generator always writes the paired clean uint8 segmentation in this folder.
+  save_velocity_bin: true
+  velocity_bin_dir: test
+
+  # Do not persist the transient 18-channel pathline tensor; it is still fully
+  # computed because pathline.enabled/save_all_features are true above.
+  save_pathline_bin: false
+  pathline_bin_dir: noisy_pathlines
+  # No duplicate float32 segmentation is needed; the MVUNet pair above already
+  # contains its clean uint8 label.
+  save_segmentation_bin: false
+  segmentation_bin_dir: test
+  # No per-sample pathline metadata is needed when pathline binaries are off.
+  save_sample_meta: false
+  sample_meta_dir: noisy_pathlines
+  iso_value: 0.0         # signed-distance boundary used by segmentation
+  # unsteady materialization (velocity grids are large):
+  # 6000 = 300 complete steady-field groups x 20 observers, suitable for
+  # SplitMVUNet.py. Use --full for all 60000 samples.
+  unsteady_subset: 6000
+  shard_size: 200         # used only when save_unsteady_npz is enabled

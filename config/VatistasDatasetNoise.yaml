@@ -1,0 +1,168 @@
+# Vatistas/Tobias noisy-grid dataset generation.
+#
+# The analytical Vatistas/Tobias velocity is sampled first. Independent
+# Gaussian noise is then added to the discrete u and v arrays. From that point
+# onward, velocity evaluation uses noisy-grid interpolation and every spatial
+# derivative uses finite differences on the noisy grid. Analytical Vatistas
+# signed-distance labels remain clean.
+#
+# Run:
+#   python VatistasFlowDatasetGeneratorNoise.py \
+#     --config config/VatistasDatasetNoise.yaml
+
+seed: 7068
+
+# Scalar: same relative noise for u and v. Also accepted:
+#   noise_level: [0.05, 0.10]
+#   noise_level: {u: 0.05, v: 0.10}
+noise_level: 0.00
+noise:
+  # component_rms: sigma_u=level_u*rms(u), sigma_v=level_v*rms(v)
+  # velocity_rms:  use one RMS speed for both component reference scales
+  # absolute:      noise_level is the Gaussian standard deviation itself
+  scale: component_rms
+  mean: 0.0
+  seed_offset: 104729
+
+fit_dir: outputs/vatistas_fit
+fit_config: config/FittingVatistas.yaml
+
+model:
+  bounds: {rc: [0.05, 2.0], n: [0.5, 6.0], s: [0.05, 5.0], t: [1.5]}
+  geometry:
+    min_core_axis: 0.05
+    max_core_axis: 0.50
+    domain_limit: 0.95
+    center_limit: 0.90
+    spacing_factor: 1.50
+    spacing_margin: 0.05
+    max_interaction_ratio: 0.15
+    max_center_shift_fraction: 0.20
+    interaction_ring_samples: 32
+    max_fit_mse: 0.30
+
+# Steady field pool: 3000 = 1400 random + 1500 fitted + 100 Killing.
+generate:
+  num_fields: 1400
+  grid: 64
+  min_vortices: 1
+  max_vortices: 2
+  enforce_spacing: true
+  min_contribution: 0.05
+  max_sample_attempts: 500
+  max_field_attempts: 200
+
+fitted:
+  num_fields: 1500
+  prefer_low_mse: true
+  profile_policy: clean_random_1_or_2
+  min_vortices: 1
+  max_vortices: 2
+  profile_jitter_std: 0.02
+  profile_jitter_attempts: 16
+  max_interaction_ratio: 0.15
+  max_center_shift_fraction: 0.10
+
+killing_fields:
+  num: 100
+  abc_range: [0.8, 0.8, 1.0]
+
+observer:
+  transformation: tobias
+  per_field: 20
+  timesteps: 24
+  tmin: 0.0
+  tmax: 1.0
+  center: [0.0, 0.0]
+  start_pos: [0.0, 0.0]
+  a0_range: 0.30
+  adot_range: 0.30
+  c0_range: 0.60
+  cdot_range: 0.60
+  make_labels: true
+
+pathline:
+  enabled: ture
+  # true: save all 18 noisy-grid pathline features.
+  # false: save only the legacy seven features [x, y, t, IVD,
+  #        distance_or_seed_label, u, v], compatible with V0 checkpoints.
+  save_all_features: true
+  # All four original modes remain available:
+  #   RECTANGULAR_CLUSTER4_RANDOM
+  #   GRID_CROSS_SEEDING
+  #   VORTICITY_IMPORTANCE_SEEDING
+  #   FEATURE_ADAPTIVE_MESH_SEEDING
+  # The feature-adaptive default exercises the noisy finite-difference
+  # vorticity monitor and adaptive CVT mesh.
+  sampling: FEATURE_ADAPTIVE_MESH_SEEDING
+  count_k: 16
+  length: 16
+  jitter_std: 0.05
+
+  vorticity_candidate_multiplier: 8
+  vorticity_uniform_fraction: 0.20
+  vorticity_importance_power: 1.5
+  vorticity_clip_percentile: 99.0
+  vorticity_boundary_margin: 1.0e-6
+
+  feature_high_fraction: 0.80
+  feature_high_vorticity_percentile: 70.0
+  feature_mesh_resolution: 64
+  feature_mesh_size_ratio: 4.0
+  feature_monitor_power: 1.5
+  feature_mesh_iterations: 5
+  feature_clip_percentile: 99.0
+  feature_boundary_margin: 1.0e-6
+
+  padding_value: -1000.0
+  max_reseed_attempts: 32
+
+# LIC uses the same noisy velocity grid. The segmentation overlay remains the
+# clean analytical label.
+lic:
+  enabled: false
+  image_size: 256
+  noise_size: 256
+  noise_seed_offset: 811
+  step_size: 0.002
+  max_steps: 64
+  frame_stride: 1
+  color_by_velocity_magnitude: true
+  overlay_segmentation: true
+  mesh_overlay_enabled: true
+  mesh_line_color: [0, 255, 255]
+  mesh_line_alpha: 210
+  mesh_line_width: 1
+  mesh_point_color: [255, 55, 35]
+  mesh_point_alpha: 245
+  mesh_point_radius: 2
+  mesh_point_outline_color: [255, 255, 255]
+  mesh_point_outline_width: 1
+  mesh_seed_offset: 1733
+
+output:
+  out_dir: outputs/trainable_mesh_00noise_seeding
+  save_plots: false
+  save_steady: false
+  save_unsteady_npz: false
+
+  # These four dense channels are [noisy u, noisy v, noisy-grid curl,
+  # noisy-grid IVD].
+  save_velocity_bin: false
+  velocity_bin_dir: test
+
+  # The pathline channel count is controlled by
+  # pathline.save_all_features above. In 18-channel mode the first seven
+  # retain the legacy order; the remaining channels are LAVD, vorticity,
+  # the four gradient entries, divergence, strain magnitude, determinant,
+  # swirl strength and Q.
+  save_pathline_bin: true
+  pathline_bin_dir: test
+  save_segmentation_bin: false
+  segmentation_bin_dir: velocity_mix
+  save_sample_meta: true
+  sample_meta_dir: test
+  iso_value: 0.0
+
+  unsteady_subset: 6000
+  shard_size: 200

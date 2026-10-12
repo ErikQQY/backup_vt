@@ -1,0 +1,161 @@
+# ---------------------------------------------------------------------------
+# VortexTransformer data-generation pipeline (paper Section 3.1 / dissertation Ch.9).
+#
+# Paper-exact totals (dissertation p.117):
+#   STEADY  = 3000  = 1500 fitted (real-data patches) + 1400 random (from the fitted
+#                     distribution) + 100 manually-added Killing fields.
+#   UNSTEADY = 60000 = 3000 steady x 20 randomly-sampled rigid-body observers over T=[0,1].
+# Each observer is 6 scalars (a,b,c, adot,bdot,cdot); its transform is identity at t0, so
+# all 20 variants of a steady field share ONE ground-truth segmentation label.
+#
+# NB: materializing all 60000 unsteady velocity grids is ~39 GB. By default we render+save
+# the full 3000 steady set (cheap) and only WRITE a subset of unsteady variants for
+# verification; pass --full to stream all 60000 to disk in shards. The reported/target
+# totals always equal the paper regardless of how many are written.
+#
+# Run:  python VatistasFlowDatasetGenerator.py --config config/VatistasDataset.yaml
+#       python VatistasFlowDatasetGenerator.py --full        # write all 60000 (tens of GB)
+# ---------------------------------------------------------------------------
+seed: 7068
+
+fit_dir: outputs/vatistas_fit          # cached BEST fit (mean MSE 0.0094 = 34.7 dB PSNR)
+fit_config: config/FittingVatistas.yaml  # only used with --refit
+
+model:
+  bounds: {rc: [0.05, 2.0], n: [0.5, 6.0], s: [0.05, 5.0], t: [1.5]}
+  geometry:
+    min_core_axis: 0.05
+    max_core_axis: 0.50
+    domain_limit: 0.95
+    center_limit: 0.90
+    # Relative spacing plus a direct superposition check keep nearby vortices
+    # close enough to be useful but prevent their visible centers from shifting.
+    spacing_factor: 1.50
+    spacing_margin: 0.05
+    max_interaction_ratio: 0.15
+    max_center_shift_fraction: 0.20
+    interaction_ring_samples: 32
+    max_fit_mse: 0.30
+
+# --- Steady field pool (paper: 3000 = 1400 + 1500 + 100) ---
+generate:
+  num_fields: 1400        # (a) random fields sampled from the fitted distribution
+  grid: 64                # render/output resolution on [-1,1]^2
+  min_vortices: 1
+  max_vortices: 2
+  enforce_spacing: true
+  min_contribution: 0.05
+  max_sample_attempts: 500
+  max_field_attempts: 200 # restart both profiles if the first one has no label-safe partner
+fitted:
+  num_fields: 1500        # (b) fitted real-flow patches (paper target: all 1500 cached fits)
+  prefer_low_mse: true
+  # Match the original generator: independently sample one or two valid fitted
+  # profiles; two-profile fields must also pass spacing/interaction checks.
+  profile_policy: clean_random_1_or_2
+  min_vortices: 1
+  max_vortices: 2
+  profile_jitter_std: 0.02
+  profile_jitter_attempts: 16
+  # Keep the estimated real center within 10% of the analytic core radius.
+  max_interaction_ratio: 0.15
+  max_center_shift_fraction: 0.10
+killing_fields:
+  num: 100                # (c) manually-added Killing fields (rigid-motion hard negatives:
+                          #     observer-producible -> label is EMPTY / not an objective vortex)
+  abc_range: [0.8, 0.8, 1.0]   # sampling half-range for the field's own (a, b, c)
+
+# --- Observers: 20 per steady field -> 60000 unsteady (paper) ---
+observer:
+  transformation: tobias  # port of transformation.cpp::Tobias_ObserverTransformation
+  per_field: 20           # rigid-body observers per steady field (paper: 20)
+  timesteps: 24           # T frames per unsteady field
+  tmin: 0.0
+  tmax: 1.0               # paper observes over T~=[0,1]
+  center: [0.0, 0.0]
+  start_pos: [0.0, 0.0]
+  # Tobias inputs: abc=[xdot,ydot,theta_dot], abc_dot=[xddot,yddot,theta_ddot]
+  a0_range: 0.30          # initial |xdot|,|ydot|
+  adot_range: 0.30        # constant |xddot|,|yddot|
+  c0_range: 0.60          # initial |theta_dot|
+  cdot_range: 0.60        # constant |theta_ddot|
+  make_labels: true       # save the shared t=0 objective-vortex segmentation
+
+# --- Pathlines: mirrors generateMixUnsteadyFieldPathline ---
+pathline:
+  enabled: true
+  # Options: RECTANGULAR_CLUSTER4_RANDOM, GRID_CROSS_SEEDING,
+  #          IVD_IMPORTANCE_SEEDING, FEATURE_ADAPTIVE_MESH_SEEDING
+  sampling: FEATURE_ADAPTIVE_MESH_SEEDING
+  count_k: 16             # 8x8 crosses × 4 arms = 256 pathlines
+  length: 16
+  jitter_std: 0.05
+  # Both feature-based samplers use IVD = |curl - spatial_mean(curl)| at t=tmin.
+  # The mean is computed over the full [-1,1]^2 domain via boundary circulation;
+  # this resolution is shared with the IVD channel along each pathline.
+  ivd_boundary_samples: 64 # quadrature samples per domain edge
+  # IVD_IMPORTANCE_SEEDING evaluates this many uniformly distributed
+  # candidates per final seed, then samples by IVD. Twenty percent
+  # remain uniformly selected so low-IVD/background regions keep coverage.
+  ivd_candidate_multiplier: 8
+  ivd_uniform_fraction: 0.20
+  ivd_importance_power: 1.5
+  ivd_clip_percentile: 99.0
+  ivd_boundary_margin: 1.0e-6
+  # FEATURE_ADAPTIVE_MESH_SEEDING constructs an IVD monitor on a jittered
+  # background mesh, reserves 80% of the optimized CVT mesh generators for the
+  # top 30% IVD region, and reserves the remaining 20% for the low-IVD
+  # region. Smaller target cells are used toward each group's feature extreme.
+  feature_high_fraction: 0.80
+  feature_high_ivd_percentile: 70.0
+  feature_mesh_resolution: 64
+  feature_mesh_size_ratio: 4.0
+  feature_monitor_power: 1.5
+  feature_mesh_iterations: 5
+  feature_clip_percentile: 99.0
+  feature_boundary_margin: 1.0e-6
+  padding_value: -1000.0
+  max_reseed_attempts: 32
+
+# --- LIC images: C++-style stable-noise, bidirectional LIC ---
+lic:
+  enabled: true        # If the generator generate LICImages is enabled, it will render and save the LIC images for each unsteady field.
+  image_size: 256
+  noise_size: 256
+  noise_seed_offset: 811
+  step_size: 0.002
+  max_steps: 64          # C++ uses 256; 64 keeps Python generation practical
+  frame_stride: 1        # save deformed LIC at every unsteady time step
+  color_by_velocity_magnitude: true
+  overlay_segmentation: true
+  # For every LIC PNG, also write a paired *_mesh.png containing the same LIC
+  # with the pathline seeding points and their Delaunay unstructured mesh.
+  mesh_overlay_enabled: true
+  mesh_line_color: [0, 255, 255]       # cyan edges remain visible on LIC
+  mesh_line_alpha: 210
+  mesh_line_width: 1
+  mesh_point_color: [255, 55, 35]      # large red-orange seeding points
+  mesh_point_alpha: 245
+  mesh_point_radius: 2                 # pixel radius
+  mesh_point_outline_color: [255, 255, 255]
+  mesh_point_outline_width: 1
+  mesh_seed_offset: 1733
+
+output:
+  out_dir: outputs/trainable_test
+  save_plots: true
+  save_steady: false       # write the full 3000-field steady set (params+fields+labels)
+  save_unsteady_npz: false # write unsteady_shard_*.npz; false keeps binary/meta/LIC outputs
+
+  save_velocity_bin: false # write MVUnet-ready t0 [u,v,curl,IVD] + paired uint8 segmentation binaries
+  velocity_bin_dir: analytical # keep MVUnet files separate so *_pathline.bin is not mistaken for a velocity grid
+  save_pathline_bin: false # also write Cereal-compatible sample_*_pathline.bin files
+  pathline_bin_dir: velocity_mix
+  save_segmentation_bin: false
+  segmentation_bin_dir: velocity_mix
+  save_sample_meta: false # one sample_*meta.json per pathline/segmentation pair
+  sample_meta_dir: velocity_mix
+  iso_value: 0.0         # signed-distance boundary used by segmentation
+  # unsteady materialization (velocity grids are large):
+  unsteady_subset: 50    # how many unsteady variants to WRITE by default (verification)
+  shard_size: 200         # bounds peak RAM while writing velocity + pathline arrays
