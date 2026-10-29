@@ -33,6 +33,13 @@ outputs/
 /trainedVortexTransformerV1
 /trainedVortexUNet
 /training_data
+CppProjects/
+ood/
+unify_eval/
+generalization_stronger/
+objective/
+decouple/
+
 
 /performance
 /generalization
